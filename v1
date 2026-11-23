@@ -1,0 +1,327 @@
+--------------------------------------------------------------------
+-- Lib
+local UILib = loadstring(game:HttpGet('https://raw.githubusercontent.com/inceldom/kinx/main/ui'))()
+
+local win = UILib:Window("Noob Army Tycoon", Color3.fromRGB(44, 120, 224), Enum.KeyCode.RightControl)
+
+local player = game.Players.LocalPlayer
+local tweenService = game:GetService("TweenService")
+local tweenInfo = TweenInfo.new(1.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+local connections = {}
+
+--------------------------------------------------------------------
+-- Auto Farm Tab
+local Farm = win:Tab("Auto Farm")
+
+local tycoonName = player.Name .. " tycoon"
+
+local function getTycoon()
+    return workspace.Tycoons:FindFirstChild(tycoonName)
+end
+
+-- Resolves a prompt's real WORLD position. Using prompt.Parent.Position
+-- directly breaks when the prompt is parented to something other than a
+-- plain BasePart — e.g. an Attachment, whose .Position is a LOCAL offset,
+-- not a world position. Using that local offset as a world CFrame is
+-- exactly what sends you flying to the middle of the map. This checks the
+-- parent type and always returns a proper world-space Vector3.
+local function getPromptWorldPosition(prompt)
+    local parent = prompt.Parent
+    if not parent then return nil end
+    if parent:IsA("Attachment") then
+        return parent.WorldPosition
+    elseif parent:IsA("BasePart") then
+        return parent.Position
+    elseif parent:IsA("Model") then
+        local ok, pivot = pcall(function() return parent:GetPivot() end)
+        if ok and pivot then return pivot.Position end
+        if parent.PrimaryPart then return parent.PrimaryPart.Position end
+    end
+    return nil
+end
+
+local function tweenTo(pos)
+    if not pos then return end
+    local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+    if root then
+        tweenService:Create(root, tweenInfo, {CFrame = CFrame.new(pos + Vector3.new(0, 5, 0))}):Play()
+        wait(1.6)
+    end
+end
+
+local function isAvailable(prompt)
+    return prompt and prompt.Enabled and prompt.Parent and prompt.Parent.Parent
+end
+
+-- Strict matcher: compares case-insensitively and anchors the pattern
+-- so "Noob Worker" doesn't accidentally match something like
+-- "Noob Worker Booster" or "Noob Worker Hut". Numbers are matched with %d+.
+local function matchesExact(text, pattern)
+    if not text then return false end
+    local lowerText = text:lower()
+    local lowerPattern = pattern:lower()
+    return lowerText:match(lowerPattern) ~= nil
+end
+
+-- Patterns anchored with ^...$ so names must be an exact shape, nothing extra.
+-- ObjectText is the small line for ALL prompt types: "Noob Worker 70",
+-- "Noob Researcher 35", "Upgrade screen", "Upgrade PC" — no price in it.
+local NOOB_WORKER_PATTERN = "^noob worker %d+$"
+local NOOB_RESEARCHER_PATTERN = "^noob researcher %d+$"
+local UPGRADE_SCREEN_PATTERN = "^upgrade screen$"
+local UPGRADE_PC_PATTERN = "^upgrade pc$"
+
+-- The price lives in ActionText, e.g. "Upgrade for $66000" or
+-- "Upgrade for $198.00k" (the "k" suffix means thousands).
+local function parsePrice(text)
+    if not text then return nil end
+    local numPart, suffix = text:match("%$([%d,%.]+)(%a*)")
+    if not numPart then return nil end
+    numPart = numPart:gsub(",", "")
+    local value = tonumber(numPart)
+    if not value then return nil end
+    suffix = suffix:lower()
+    if suffix == "k" then
+        value = value * 1000
+    elseif suffix == "m" then
+        value = value * 1000000
+    end
+    return value
+end
+
+-- Scans the whole tycoon for available upgrade prompts whose ObjectText
+-- matches `pattern` exactly, and returns the one with the lowest price
+-- (parsed from ActionText).
+local function findCheapestUpgrade(tycoon, pattern)
+    local best, bestPrice = nil, nil
+    for _, prompt in pairs(tycoon:GetDescendants()) do
+        if prompt:IsA("ProximityPrompt") and isAvailable(prompt)
+            and matchesExact(prompt.ObjectText, pattern) then
+            local price = parsePrice(prompt.ActionText)
+            if price and (bestPrice == nil or price < bestPrice) then
+                best, bestPrice = prompt, price
+            end
+        end
+    end
+    return best
+end
+
+-- Auto Buy Money Worker
+local buyWorkerRunning = false
+Farm:Toggle("Auto Buy Money Worker", false, function(t)
+    buyWorkerRunning = t
+    if t then
+        local conn = spawn(function()
+            while buyWorkerRunning do
+                local tycoon = getTycoon()
+                if tycoon then
+                    for _, prompt in pairs(tycoon:GetDescendants()) do
+                        if not buyWorkerRunning then break end
+                        if prompt:IsA("ProximityPrompt") and isAvailable(prompt)
+                            and matchesExact(prompt.ObjectText, NOOB_WORKER_PATTERN) then
+                            tweenTo(getPromptWorldPosition(prompt))
+                            fireproximityprompt(prompt)
+                            wait(0.8)
+                            break
+                        end
+                    end
+                end
+                wait(0.5)
+            end
+        end)
+        table.insert(connections, conn)
+    end
+end)
+
+-- Auto Buy Research Worker
+local buyResearcherRunning = false
+Farm:Toggle("Auto Buy Research Worker", false, function(t)
+    buyResearcherRunning = t
+    if t then
+        local conn = spawn(function()
+            while buyResearcherRunning do
+                local tycoon = getTycoon()
+                if tycoon then
+                    for _, prompt in pairs(tycoon:GetDescendants()) do
+                        if not buyResearcherRunning then break end
+                        if prompt:IsA("ProximityPrompt") and isAvailable(prompt)
+                            and matchesExact(prompt.ObjectText, NOOB_RESEARCHER_PATTERN) then
+                            tweenTo(getPromptWorldPosition(prompt))
+                            fireproximityprompt(prompt)
+                            wait(0.8)
+                            break
+                        end
+                    end
+                end
+                wait(0.5)
+            end
+        end)
+        table.insert(connections, conn)
+    end
+end)
+
+-- Auto Upgrade Screens (buys the cheapest available "Upgrade screen" prompt first)
+local upgradeScreenRunning = false
+Farm:Toggle("Auto Upgrade Screens", false, function(t)
+    upgradeScreenRunning = t
+    if t then
+        local conn = spawn(function()
+            while upgradeScreenRunning do
+                local tycoon = getTycoon()
+                if tycoon then
+                    local prompt = findCheapestUpgrade(tycoon, UPGRADE_SCREEN_PATTERN)
+                    if prompt then
+                        tweenTo(getPromptWorldPosition(prompt))
+                        fireproximityprompt(prompt)
+                        wait(0.8)
+                    end
+                end
+                wait(0.5)
+            end
+        end)
+        table.insert(connections, conn)
+    end
+end)
+
+-- Auto Upgrade PCs (buys the cheapest available "Upgrade PC" prompt first)
+local upgradePcRunning = false
+Farm:Toggle("Auto Upgrade PCs", false, function(t)
+    upgradePcRunning = t
+    if t then
+        local conn = spawn(function()
+            while upgradePcRunning do
+                local tycoon = getTycoon()
+                if tycoon then
+                    local prompt = findCheapestUpgrade(tycoon, UPGRADE_PC_PATTERN)
+                    if prompt then
+                        tweenTo(getPromptWorldPosition(prompt))
+                        fireproximityprompt(prompt)
+                        wait(0.8)
+                    end
+                end
+                wait(0.5)
+            end
+        end)
+        table.insert(connections, conn)
+    end
+end)
+
+Farm:Label("Only targets unlocked items")
+
+--------------------------------------------------------------------
+-- Auto Vote Tab
+local Main = win:Tab("Auto Vote")
+
+local voteRemote = game:GetService("ReplicatedStorage"):FindFirstChild("Remotes", true):FindFirstChild("Other", true):FindFirstChild("VoteGamemode")
+
+-- Each vote toggle now keeps its own connection reference and disconnects
+-- it the moment the toggle goes off, instead of letting the Heartbeat
+-- connection run forever regardless of toggle state.
+local function createVoteToggle(name)
+    local voteConn = nil
+    Main:Toggle("Auto " .. name, false, function(t)
+        if t then
+            voteConn = game:GetService("RunService").Heartbeat:Connect(function()
+                if voteRemote then voteRemote:FireServer(name) end
+            end)
+            table.insert(connections, voteConn)
+        else
+            if voteConn then
+                voteConn:Disconnect()
+                voteConn = nil
+            end
+        end
+    end)
+end
+
+createVoteToggle("King of the hill")
+createVoteToggle("Classic")
+createVoteToggle("Blitz")
+createVoteToggle("PvE")
+createVoteToggle("Red noobs invasion")
+createVoteToggle("Daily challenge")
+
+--------------------------------------------------------------------
+-- Misc Tab
+local Misc = win:Tab("Misc")
+
+Misc:Toggle("Anti-AFK", true, function(t)
+    if t then
+        local vu = game:GetService("VirtualUser")
+        game.Players.LocalPlayer.Idled:Connect(function()
+            vu:CaptureController()
+            vu:ClickButton2(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+        end)
+    end
+end)
+
+-- WalkSpeed: toggle enables enforcing the slider value every frame;
+-- turning it off resets WalkSpeed back to the Roblox default (16).
+local ROBLOX_DEFAULT_WALKSPEED = 16
+local walkSpeedEnabled = false
+local walkSpeedValue = ROBLOX_DEFAULT_WALKSPEED
+
+Misc:Toggle("WalkSpeed Enabled", false, function(t)
+    walkSpeedEnabled = t
+    if not t and player.Character and player.Character:FindFirstChild("Humanoid") then
+        player.Character.Humanoid.WalkSpeed = ROBLOX_DEFAULT_WALKSPEED
+    end
+end)
+
+Misc:Slider("WalkSpeed", ROBLOX_DEFAULT_WALKSPEED, 250, ROBLOX_DEFAULT_WALKSPEED, function(v)
+    walkSpeedValue = v
+end)
+
+-- JumpPower: same pattern, default/minimum is Roblox's default (50).
+local ROBLOX_DEFAULT_JUMPPOWER = 50
+local jumpPowerEnabled = false
+local jumpPowerValue = ROBLOX_DEFAULT_JUMPPOWER
+
+Misc:Toggle("JumpPower Enabled", false, function(t)
+    jumpPowerEnabled = t
+    if not t and player.Character and player.Character:FindFirstChild("Humanoid") then
+        player.Character.Humanoid.JumpPower = ROBLOX_DEFAULT_JUMPPOWER
+    end
+end)
+
+Misc:Slider("JumpPower", ROBLOX_DEFAULT_JUMPPOWER, 500, ROBLOX_DEFAULT_JUMPPOWER, function(v)
+    jumpPowerValue = v
+end)
+
+game:GetService("RunService").RenderStepped:Connect(function()
+    local char = player.Character
+    if char and char:FindFirstChild("Humanoid") then
+        if walkSpeedEnabled then
+            char.Humanoid.WalkSpeed = walkSpeedValue
+        end
+        if jumpPowerEnabled then
+            char.Humanoid.JumpPower = jumpPowerValue
+        end
+    end
+end)
+
+Misc:Button("Rejoin Server", function()
+    game:GetService("TeleportService"):Teleport(game.PlaceId, player)
+end)
+
+Misc:Button("Destroy UI", function()
+    for _, conn in pairs(connections) do pcall(function() conn:Disconnect() end) end
+    pcall(function() win.ScreenGui:Destroy() end)
+end)
+
+Misc:Button("Copy Discord Invite", function()
+
+    setclipboard("https://discord.gg/nvmDurddFK")
+
+    UILib:Notification("Skid Hub", "Discord link copied!", "OK")
+
+end)
+
+--------------------------------------------------------------------
+-- Credits Tab
+local CreditsTab = win:Tab("Credits")
+
+CreditsTab:Label("Skid Hub | Noob Army Tycoon")
+CreditsTab:Label("Scripted by: xaq2k")
+CreditsTab:Label("UI by: inceldom")
